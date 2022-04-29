@@ -287,72 +287,77 @@ def train(opt):
             last_epoch = step // num_iter_per_epoch
             if epoch < last_epoch:
                 continue
+            try:
+                epoch_loss = []
+                progress_bar = tqdm(training_generator)
+                for iter, data in enumerate(progress_bar):
+                    if iter < step - last_epoch * num_iter_per_epoch:
+                        progress_bar.update()
+                        continue
+                    try:
+                        imgs = data['img']
+                        annot = data['annot']
+                        seg_annot = data['segmentation']
 
-            epoch_loss = []
-            progress_bar = tqdm(training_generator)
-            for iter, data in enumerate(progress_bar):
-                if iter < step - last_epoch * num_iter_per_epoch:
-                    progress_bar.update()
-                    continue
-                try:
-                    imgs = data['img']
-                    annot = data['annot']
-                    seg_annot = data['segmentation']
+                        if opt.num_gpus == 1:
+                            # if only one gpu, just send it to cuda:0
+                            # elif multiple gpus, send it to multiple gpus in CustomDataParallel, not here
+                            imgs = imgs.cuda()
+                            annot = annot.cuda()
+                            seg_annot = seg_annot.cuda().long()
 
-                    if opt.num_gpus == 1:
-                        # if only one gpu, just send it to cuda:0
-                        # elif multiple gpus, send it to multiple gpus in CustomDataParallel, not here
-                        imgs = imgs.cuda()
-                        annot = annot.cuda()
-                        seg_annot = seg_annot.cuda().long()
+                        optimizer.zero_grad()
+                        cls_loss, reg_loss, seg_loss, regression, classification, anchors, segmentation = model(imgs, annot,
+                                                                                                                seg_annot,
+                                                                                                                obj_list=params.obj_list)
+                        cls_loss = cls_loss.mean()
+                        reg_loss = reg_loss.mean()
+                        seg_loss = seg_loss.mean()
 
-                    optimizer.zero_grad()
-                    cls_loss, reg_loss, seg_loss, regression, classification, anchors, segmentation = model(imgs, annot,
-                                                                                                            seg_annot,
-                                                                                                            obj_list=params.obj_list)
-                    cls_loss = cls_loss.mean()
-                    reg_loss = reg_loss.mean()
-                    seg_loss = seg_loss.mean()
+                        loss = cls_loss + reg_loss + seg_loss
+                        if loss == 0 or not torch.isfinite(loss):
+                            continue
 
-                    loss = cls_loss + reg_loss + seg_loss
-                    if loss == 0 or not torch.isfinite(loss):
+                        loss.backward()
+                        # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+                        optimizer.step()
+
+                        epoch_loss.append(float(loss))
+
+                        progress_bar.set_description(
+                            'Step: {}. Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Seg loss: {:.5f}. Total loss: {:.5f}'.format(
+                                step, epoch, opt.num_epochs, iter + 1, num_iter_per_epoch, cls_loss.item(),
+                                reg_loss.item(), seg_loss.item(), loss.item()))
+                        writer.add_scalars('Loss', {'train': loss}, step)
+                        writer.add_scalars('Regression_loss', {'train': reg_loss}, step)
+                        writer.add_scalars('Classfication_loss', {'train': cls_loss}, step)
+                        writer.add_scalars('Segmentation_loss', {'train': seg_loss}, step)
+
+                        # log learning_rate
+                        current_lr = optimizer.param_groups[0]['lr']
+                        writer.add_scalar('learning_rate', current_lr, step)
+
+                        step += 1
+
+                        if step % opt.save_interval == 0 and step > 0:
+                            save_checkpoint(model, opt.saved_path, f'hybridnets-d{opt.compound_coef}_{epoch}_{step}.pth')
+                            print('checkpoint...')
+
+                    except Exception as e:
+                        print('[Error]', traceback.format_exc())
+                        print(e)
                         continue
 
-                    loss.backward()
-                    # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-                    optimizer.step()
+                scheduler.step(np.mean(epoch_loss))
 
-                    epoch_loss.append(float(loss))
-
-                    progress_bar.set_description(
-                        'Step: {}. Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Seg loss: {:.5f}. Total loss: {:.5f}'.format(
-                            step, epoch, opt.num_epochs, iter + 1, num_iter_per_epoch, cls_loss.item(),
-                            reg_loss.item(), seg_loss.item(), loss.item()))
-                    writer.add_scalars('Loss', {'train': loss}, step)
-                    writer.add_scalars('Regression_loss', {'train': reg_loss}, step)
-                    writer.add_scalars('Classfication_loss', {'train': cls_loss}, step)
-                    writer.add_scalars('Segmentation_loss', {'train': seg_loss}, step)
-
-                    # log learning_rate
-                    current_lr = optimizer.param_groups[0]['lr']
-                    writer.add_scalar('learning_rate', current_lr, step)
-
-                    step += 1
-
-                    if step % opt.save_interval == 0 and step > 0:
-                        save_checkpoint(model, opt.saved_path, f'hybridnets-d{opt.compound_coef}_{epoch}_{step}.pth')
-                        print('checkpoint...')
-
-                except Exception as e:
-                    print('[Error]', traceback.format_exc())
-                    print(e)
-                    continue
-
-            scheduler.step(np.mean(epoch_loss))
-
-            if epoch % opt.val_interval == 0:
-                best_fitness, best_loss, best_epoch = val(model, optimizer, val_generator, params, opt, writer, epoch,
-                                                          step, best_fitness, best_loss, best_epoch)
+                if epoch % opt.val_interval == 0:
+                    best_fitness, best_loss, best_epoch = val(model, optimizer, val_generator, params, opt, writer, epoch,
+                                                            step, best_fitness, best_loss, best_epoch)
+            except KeyboardInterrupt as e:
+                raise e
+            except Exception as e:
+                print("Epoch error:", str(e))
+                print(traceback.format_exc())
     except KeyboardInterrupt:
         save_checkpoint(model, opt.saved_path, f'hybridnets-d{opt.compound_coef}_{epoch}_{step}.pth')
     finally:
