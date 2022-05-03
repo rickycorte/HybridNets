@@ -1,3 +1,5 @@
+from tkinter import E
+import traceback
 import torch
 import numpy as np
 import argparse
@@ -35,106 +37,113 @@ def val(model, optimizer, val_generator, params, opt, writer, epoch, step, best_
 
     val_loader = tqdm(val_generator)
     for iter, data in enumerate(val_loader):
-        imgs = data['img']
-        annot = data['annot']
-        seg_annot = data['segmentation']
-        filenames = data['filenames']
-        shapes = data['shapes']
+        try:
+            imgs = data['img']
+            annot = data['annot']
+            seg_annot = data['segmentation']
+            filenames = data['filenames']
+            shapes = data['shapes']
 
-        if opt.num_gpus == 1:
-            imgs = imgs.cuda()
-            annot = annot.cuda()
-            seg_annot = seg_annot.cuda()
+            if opt.num_gpus == 1:
+                imgs = imgs.cuda()
+                annot = annot.cuda()
+                seg_annot = seg_annot.cuda()
 
-        cls_loss, reg_loss, seg_loss, regression, classification, anchors, segmentation = model(imgs, annot,
-                                                                                                seg_annot,
-                                                                                                obj_list=params.obj_list)
-        cls_loss = cls_loss.mean()
-        reg_loss = reg_loss.mean()
-        seg_loss = seg_loss.mean()
+            cls_loss, reg_loss, seg_loss, regression, classification, anchors, segmentation = model(imgs, annot,
+                                                                                                    seg_annot,
+                                                                                                    obj_list=params.obj_list)
+            cls_loss = cls_loss.mean()
+            reg_loss = reg_loss.mean()
+            seg_loss = seg_loss.mean()
 
-        if opt.cal_map:
-            out = postprocess(imgs.detach(),
-                              torch.stack([anchors[0]] * imgs.shape[0], 0).detach(), regression.detach(),
-                              classification.detach(),
-                              regressBoxes, clipBoxes,
-                              0.001, 0.6)  # 0.5, 0.3
+            if opt.cal_map:
+                out = postprocess(imgs.detach(),
+                                torch.stack([anchors[0]] * imgs.shape[0], 0).detach(), regression.detach(),
+                                classification.detach(),
+                                regressBoxes, clipBoxes,
+                                0.001, 0.6)  # 0.5, 0.3
 
-            for i in range(annot.size(0)):
-                seen += 1
-                labels = annot[i]
-                labels = labels[labels[:, 4] != -1]
+                for i in range(annot.size(0)):
+                    seen += 1
+                    labels = annot[i]
+                    labels = labels[labels[:, 4] != -1]
 
-                ou = out[i]
-                nl = len(labels)
+                    ou = out[i]
+                    nl = len(labels)
 
-                pred = np.column_stack([ou['rois'], ou['scores']])
-                pred = np.column_stack([pred, ou['class_ids']])
-                pred = torch.from_numpy(pred).cuda()
+                    pred = np.column_stack([ou['rois'], ou['scores']])
+                    pred = np.column_stack([pred, ou['class_ids']])
+                    pred = torch.from_numpy(pred).cuda()
 
-                target_class = labels[:, 4].tolist() if nl else []  # target class
+                    target_class = labels[:, 4].tolist() if nl else []  # target class
 
-                if len(pred) == 0:
+                    if len(pred) == 0:
+                        if nl:
+                            stats.append((torch.zeros(0, num_thresholds, dtype=torch.bool),
+                                        torch.Tensor(), torch.Tensor(), target_class))
+                        # print("here")
+                        continue
+
                     if nl:
-                        stats.append((torch.zeros(0, num_thresholds, dtype=torch.bool),
-                                      torch.Tensor(), torch.Tensor(), target_class))
-                    # print("here")
-                    continue
+                        pred[:, :4] = scale_coords(imgs[i][1:], pred[:, :4], shapes[i][0], shapes[i][1])
+                        labels = scale_coords(imgs[i][1:], labels, shapes[i][0], shapes[i][1])
+                        correct = process_batch(pred, labels, iou_thresholds)
+                        if opt.plots:
+                            confusion_matrix.process_batch(pred, labels)
+                    else:
+                        correct = torch.zeros(pred.shape[0], num_thresholds, dtype=torch.bool)
+                    stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), target_class))
 
-                if nl:
-                    pred[:, :4] = scale_coords(imgs[i][1:], pred[:, :4], shapes[i][0], shapes[i][1])
-                    labels = scale_coords(imgs[i][1:], labels, shapes[i][0], shapes[i][1])
-                    correct = process_batch(pred, labels, iou_thresholds)
-                    if opt.plots:
-                        confusion_matrix.process_batch(pred, labels)
-                else:
-                    correct = torch.zeros(pred.shape[0], num_thresholds, dtype=torch.bool)
-                stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), target_class))
+                    # print(stats)
 
-                # print(stats)
+                    # Visualization
+                    # seg_0 = segmentation[i]
+                    # # print('bbb', seg_0.shape)
+                    # seg_0 = torch.argmax(seg_0, dim = 0)
+                    # # print('before', seg_0.shape)
+                    # seg_0 = seg_0.cpu().numpy()
+                    #     #.transpose(1, 2, 0)
+                    # # print(seg_0.shape)
+                    # anh = np.zeros((384,640,3))
+                    # anh[seg_0 == 0] = (255,0,0)
+                    # anh[seg_0 == 1] = (0,255,0)
+                    # anh[seg_0 == 2] = (0,0,255)
+                    # anh = np.uint8(anh)
+                    # cv2.imwrite('segmentation-{}.jpg'.format(filenames[i]),anh)
 
-                # Visualization
-                # seg_0 = segmentation[i]
-                # # print('bbb', seg_0.shape)
-                # seg_0 = torch.argmax(seg_0, dim = 0)
-                # # print('before', seg_0.shape)
-                # seg_0 = seg_0.cpu().numpy()
-                #     #.transpose(1, 2, 0)
-                # # print(seg_0.shape)
-                # anh = np.zeros((384,640,3))
-                # anh[seg_0 == 0] = (255,0,0)
-                # anh[seg_0 == 1] = (0,255,0)
-                # anh[seg_0 == 2] = (0,0,255)
-                # anh = np.uint8(anh)
-                # cv2.imwrite('segmentation-{}.jpg'.format(filenames[i]),anh)
+                # Convert segmentation tensor --> 3 binary 0 1
+                # batch_size, num_classes, height, width
+                _, segmentation = torch.max(segmentation, 1)
+                # _, seg_annot = torch.max(seg_annot, 1)
+                seg = torch.zeros((seg_annot.size(0), 3, 384, 640), dtype=torch.int32)
+                seg[:, 0, ...][segmentation == 0] = 1
+                seg[:, 1, ...][segmentation == 1] = 1
+                seg[:, 2, ...][segmentation == 2] = 1
 
-            # Convert segmentation tensor --> 3 binary 0 1
-            # batch_size, num_classes, height, width
-            _, segmentation = torch.max(segmentation, 1)
-            # _, seg_annot = torch.max(seg_annot, 1)
-            seg = torch.zeros((seg_annot.size(0), 3, 384, 640), dtype=torch.int32)
-            seg[:, 0, ...][segmentation == 0] = 1
-            seg[:, 1, ...][segmentation == 1] = 1
-            seg[:, 2, ...][segmentation == 2] = 1
+                tp_seg, fp_seg, fn_seg, tn_seg = smp_metrics.get_stats(seg.cuda(), seg_annot.long().cuda(),
+                                                                    mode='multilabel', threshold=None)
 
-            tp_seg, fp_seg, fn_seg, tn_seg = smp_metrics.get_stats(seg.cuda(), seg_annot.long().cuda(),
-                                                                   mode='multilabel', threshold=None)
+                iou = smp_metrics.iou_score(tp_seg, fp_seg, fn_seg, tn_seg, reduction='none')
+                #         print(iou)
+                f1 = smp_metrics.balanced_accuracy(tp_seg, fp_seg, fn_seg, tn_seg, reduction='none')
 
-            iou = smp_metrics.iou_score(tp_seg, fp_seg, fn_seg, tn_seg, reduction='none')
-            #         print(iou)
-            f1 = smp_metrics.balanced_accuracy(tp_seg, fp_seg, fn_seg, tn_seg, reduction='none')
+                for i in range(len(params.seg_list) + 1):
+                    iou_ls[i].append(iou.T[i].detach().cpu().numpy())
+                    f1_ls[i].append(f1.T[i].detach().cpu().numpy())
 
-            for i in range(len(params.seg_list) + 1):
-                iou_ls[i].append(iou.T[i].detach().cpu().numpy())
-                f1_ls[i].append(f1.T[i].detach().cpu().numpy())
+            loss = cls_loss + reg_loss + seg_loss
+            if loss == 0 or not torch.isfinite(loss):
+                continue
 
-        loss = cls_loss + reg_loss + seg_loss
-        if loss == 0 or not torch.isfinite(loss):
-            continue
-
-        loss_classification_ls.append(cls_loss.item())
-        loss_regression_ls.append(reg_loss.item())
-        loss_segmentation_ls.append(seg_loss.item())
+            loss_classification_ls.append(cls_loss.item())
+            loss_regression_ls.append(reg_loss.item())
+            loss_segmentation_ls.append(seg_loss.item())
+        
+        except KeyboardInterrupt as e:
+            raise e
+        except Exception as e:
+            print("Validation error:", str(e))
+            print(traceback.format_exc())
 
     cls_loss = np.mean(loss_classification_ls)
     reg_loss = np.mean(loss_regression_ls)
