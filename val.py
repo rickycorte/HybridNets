@@ -1,4 +1,3 @@
-from tkinter import E
 import traceback
 import torch
 import numpy as np
