@@ -325,7 +325,7 @@ def train(opt):
                         epoch_loss.append(float(loss))
 
                         progress_bar.set_description(
-                            'Step: {}. Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Seg loss: {:.5f}. Total loss: {:.5f}'.format(
+                            'Step: {}. Epoch: {}/{}. Itr: {}/{}. Cls loss: {:.4f}. Reg loss: {:.4f}. Seg loss: {:.4f}. Total loss: {:.4f}'.format(
                                 step, epoch, opt.num_epochs, iter + 1, num_iter_per_epoch, cls_loss.item(),
                                 reg_loss.item(), seg_loss.item(), loss.item()))
                         writer.add_scalars('Loss', {'train': loss}, step)
@@ -344,7 +344,7 @@ def train(opt):
                             print('checkpoint...')
 
                     except Exception as e:
-                        print('[Error]', traceback.format_exc())
+                        print('\n[Error]', traceback.format_exc())
                         print(e)
                         continue
 
@@ -356,7 +356,7 @@ def train(opt):
             except KeyboardInterrupt as e:
                 raise e
             except Exception as e:
-                print("Epoch error:", str(e))
+                print("\nEpoch error:", str(e))
                 print(traceback.format_exc())
     except KeyboardInterrupt:
         save_checkpoint(model, opt.saved_path, f'hybridnets-d{opt.compound_coef}_{epoch}_{step}.pth')

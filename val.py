@@ -224,7 +224,7 @@ def val(model, optimizer, val_generator, params, opt, writer, epoch, step, best_
                     'best_fitness': best_fitness,
                     'model': model,
                     'optimizer': optimizer.state_dict()}
-            print("Saving checkpoint with best fitness", fi[0])
+            print("\nSaving checkpoint with best fitness", fi[0])
             save_checkpoint(ckpt, opt.saved_path, f'hybridnets-d{opt.compound_coef}_{epoch}_{step}_best.pth')
     else:
         # if not calculating map, save by best loss
@@ -236,7 +236,7 @@ def val(model, optimizer, val_generator, params, opt, writer, epoch, step, best_
 
     # Early stopping
     if epoch - best_epoch > opt.es_patience > 0:
-        print('[Info] Stop training at epoch {}. The lowest loss achieved is {}'.format(epoch, best_loss))
+        print('\n[Info] Stop training at epoch {}. The lowest loss achieved is {}'.format(epoch, best_loss))
         writer.close()
         exit(0)
 
